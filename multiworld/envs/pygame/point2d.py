@@ -27,9 +27,9 @@ class Point2DEnv(MultitaskEnv, Serializable):
             render_onscreen=False,
             render_size=84,
             reward_type="dense",
-            action_scale=1.0,
+            action_scale=0.01,
             target_radius=0.60,
-            boundary_dist=4,
+            boundary_dist=0.15,
             ball_radius=0.50,
             walls=None,
             fixed_goal=None,
@@ -84,6 +84,7 @@ class Point2DEnv(MultitaskEnv, Serializable):
 
         self.drawer = None
         self.render_drawer = None
+        self.meta_time = -1
 
     def step(self, velocities):
         assert self.action_scale <= 1.0
@@ -121,10 +122,12 @@ class Point2DEnv(MultitaskEnv, Serializable):
     def reset(self):
         self._target_position = self.sample_goal()['state_desired_goal']
         if self.randomize_position_on_reset:
-            self._position = self._sample_position(
-                self.obs_range.low,
-                self.obs_range.high,
-            )
+            # self._position = self._sample_position(
+            #     self.obs_range.low,
+            #     self.obs_range.high,
+            # )
+            self._position = np.zeros(2)
+        self.meta_time += 1
 
         return self._get_obs()
 
@@ -202,13 +205,24 @@ class Point2DEnv(MultitaskEnv, Serializable):
             )
         else:
             goals = np.zeros((batch_size, self.obs_range.low.size))
+            # r = self.traj_a * np.arctan(0.001 * self.meta_time)
             for b in range(batch_size):
                 if batch_size > 1:
                     logging.warning("This is very slow!")
-                goals[b, :] = self._sample_position(
-                    self.obs_range.low,
-                    self.obs_range.high,
-                )
+                # goals[b, :] = self._sample_position(
+                #     self.obs_range.low,
+                #     self.obs_range.high,
+                # )
+                # goals[b, 0] = r * np.cos(0.1*self.meta_time)
+                # goals[b, 1] = r * np.sin(0.1*self.meta_time)
+
+                # CIRCLE
+                goals[b, 0] = 0.1 * np.cos(0.5*self.meta_time)
+                goals[b, 1] = 0.1 * np.sin(0.5*self.meta_time)
+
+                # LINE
+                # goals[b, 0] = 0.1 * self.meta_time / 2000
+                # goals[b, 1] = 0.1 - 0.1 * self.meta_time / 2000
         return {
             'desired_goal': goals,
             'state_desired_goal': goals,
