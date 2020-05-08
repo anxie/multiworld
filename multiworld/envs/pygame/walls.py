@@ -13,6 +13,7 @@ if v_wall.collides_with(init_xy, new_xy):
 ```
 """
 import abc
+import numpy as np
 
 
 class Wall(object, metaclass=abc.ABCMeta):
@@ -49,6 +50,7 @@ class Wall(object, metaclass=abc.ABCMeta):
         ]
         self.min_dist = min_dist
         self.thickness = thickness
+        self.center = np.array([(min_x + max_x) / 2, (min_y + max_y) / 2])
         self.max_x = max_x
         self.min_x = min_x
         self.max_y = max_y

@@ -14,6 +14,9 @@ from multiworld.envs.env_util import (
 from multiworld.envs.pygame.pygame_viewer import PygameViewer
 from multiworld.envs.pygame.walls import VerticalWall, HorizontalWall
 
+import matplotlib
+import matplotlib.pyplot as plt
+
 
 class Point2DEnv(MultitaskEnv, Serializable):
     """
@@ -36,6 +39,7 @@ class Point2DEnv(MultitaskEnv, Serializable):
             randomize_position_on_reset=True,
             images_are_rgb=False,  # else black and white
             show_goal=True,
+            record_interval=1,
             **kwargs
     ):
         if walls is None:
@@ -62,11 +66,13 @@ class Point2DEnv(MultitaskEnv, Serializable):
         self.randomize_position_on_reset = randomize_position_on_reset
         self.images_are_rgb = images_are_rgb
         self.show_goal = show_goal
+        self.record_interval = record_interval
 
         self.max_target_distance = self.boundary_dist - self.target_radius
 
         self._target_position = None
         self._position = np.zeros((2))
+        self._center = np.array([0.0, -0.05])
 
         u = np.ones(2)
         self.action_space = spaces.Box(-u, u, dtype=np.float32)
@@ -74,7 +80,7 @@ class Point2DEnv(MultitaskEnv, Serializable):
         o = self.boundary_dist * np.ones(2)
         self.obs_range = spaces.Box(-o, o, dtype='float32')
         self.observation_space = spaces.Dict([
-            ('observation', self.obs_range),
+            ('observations', self.obs_range),
             ('desired_goal', self.obs_range),
             ('achieved_goal', self.obs_range),
             ('state_observation', self.obs_range),
@@ -84,22 +90,37 @@ class Point2DEnv(MultitaskEnv, Serializable):
 
         self.drawer = None
         self.render_drawer = None
-        self.meta_time = -1
+        self._meta_time = -1
+        self._dtheta = 0.2
+        self._index = -1
+        self._ac_hist = []
+        self._pos_hist = []
+
+        self._step_time = 0
 
     def step(self, velocities):
-        assert self.action_scale <= 1.0
-        velocities = np.clip(velocities, a_min=-1, a_max=1) * self.action_scale
-        new_position = self._position + velocities
-        for wall in self.walls:
-            new_position = wall.handle_collision(
-                self._position, new_position
+        if self._step_time > 0 and (self._step_time + 1) % 50 == 0:
+            self.reset(True)
+        else:
+            assert self.action_scale <= 1.0
+            velocities = np.clip(velocities, a_min=-1, a_max=1) * self.action_scale
+
+            self._ac_hist.append(velocities)
+
+            new_position = self._position + velocities
+            for wall in self.walls:
+                new_position = wall.handle_collision(
+                    self._position, new_position
+                )
+            self._position = new_position
+            self._position = np.clip(
+                self._position,
+                a_min=-self.boundary_dist,
+                a_max=self.boundary_dist,
             )
-        self._position = new_position
-        self._position = np.clip(
-            self._position,
-            a_min=-self.boundary_dist,
-            a_max=self.boundary_dist,
-        )
+
+        self._pos_hist.append(self._position.copy())
+
         distance_to_target = np.linalg.norm(
             self._position - self._target_position
         )
@@ -116,18 +137,52 @@ class Point2DEnv(MultitaskEnv, Serializable):
             'is_success': is_success,
         }
         done = False
+
+        self._step_time += 1
         return ob, reward, done, info
 
 
-    def reset(self):
+    def reset(self, called_by_myself=False):
+        # if self._pos_hist and self._meta_time % self.record_interval == 0:
+        #     pos_hist = np.array(self._pos_hist)
+        #     assert pos_hist.shape[0] == 50
+
+        #     plt.figure()
+        #     ax = plt.gca()
+        #     ax.set_aspect('equal')
+
+        #     circle = plt.Circle(self._center, 0.1, color='dimgray', fill=False)
+        #     ax.add_artist(circle)
+        #     plt.scatter(pos_hist[:, 0], pos_hist[:, 1], c=[(i+1)/pos_hist.shape[0] for i in range(pos_hist.shape[0])], cmap='winter', s=20)
+        #     plt.scatter(self._target_position[0], self._target_position[1], s=30, c='dimgray')
+            
+        #     plt.xlim(self._center[0] - 0.12, self._center[0] + 0.12)
+        #     plt.ylim(self._center[1] - 0.12, self._center[1] + 0.12)
+        #     plt.savefig('/scr/annie/softlearning-ctrl/out1/{}.png'.format(self._meta_time))
+        #     plt.close()
+
+        if self._pos_hist:
+            tmp1 = 0.1 * np.array([np.cos(self._dtheta * (self._index + 1)), np.sin(self._dtheta * (self._index + 1))]) + self._center
+            tmp2 = 0.1 * np.array([np.cos(self._dtheta * (self._index - 1)), np.sin(self._dtheta * (self._index - 1))]) + self._center
+            if np.linalg.norm(self._pos_hist[-1] - tmp1) > np.linalg.norm(self._pos_hist[-1] - tmp2):
+                self._index += 1
+            else:
+                self._index -= 1
+
+        self._ac_hist = []
+        self._pos_hist = []
+
+        if not called_by_myself:
+            self._step_time = 0
+            # self._index = 0
+            # self._pos_hist = []
+
         self._target_position = self.sample_goal()['state_desired_goal']
-        if self.randomize_position_on_reset:
-            # self._position = self._sample_position(
-            #     self.obs_range.low,
-            #     self.obs_range.high,
-            # )
-            self._position = np.zeros(2)
-        self.meta_time += 1
+        self._position = np.zeros(2)
+
+        if called_by_myself:
+            self._meta_time += 1
+        # self._meta_time += 1
 
         return self._get_obs()
 
@@ -145,7 +200,7 @@ class Point2DEnv(MultitaskEnv, Serializable):
 
     def _get_obs(self):
         return dict(
-            observation=self._position.copy(),
+            observations=self._position.copy(),
             desired_goal=self._target_position.copy(),
             achieved_goal=self._position.copy(),
             state_observation=self._position.copy(),
@@ -205,24 +260,33 @@ class Point2DEnv(MultitaskEnv, Serializable):
             )
         else:
             goals = np.zeros((batch_size, self.obs_range.low.size))
-            # r = self.traj_a * np.arctan(0.001 * self.meta_time)
             for b in range(batch_size):
                 if batch_size > 1:
                     logging.warning("This is very slow!")
-                # goals[b, :] = self._sample_position(
-                #     self.obs_range.low,
-                #     self.obs_range.high,
-                # )
-                # goals[b, 0] = r * np.cos(0.1*self.meta_time)
-                # goals[b, 1] = r * np.sin(0.1*self.meta_time)
+
+                # DISCRETE
+                # if self._meta_time % 4 == 0:
+                #     goals[b, 0] = 0.1
+                #     goals[b, 1] = 0.0
+                # elif self._meta_time % 4 == 1:
+                #     goals[b, 0] = 0.0
+                #     goals[b, 1] = 0.1
+                # elif self._meta_time % 4 == 2:
+                #     goals[b, 0] = -0.1
+                #     goals[b, 1] = 0.0
+                # else:
+                #     goals[b, 0] = 0.0
+                #     goals[b, 1] = -0.1
 
                 # CIRCLE
-                goals[b, 0] = 0.1 * np.cos(0.5*self.meta_time)
-                goals[b, 1] = 0.1 * np.sin(0.5*self.meta_time)
+                # goals[b, 0] = 0.1 * np.cos(self._dtheta * self._meta_time)
+                # goals[b, 1] = 0.1 * np.sin(self._dtheta * self._meta_time)
+                goals[b, 0] = 0.1 * np.cos(self._dtheta * self._index) + self._center[0]
+                goals[b, 1] = 0.1 * np.sin(self._dtheta * self._index) + self._center[1]
 
                 # LINE
-                # goals[b, 0] = 0.1 * self.meta_time / 2000
-                # goals[b, 1] = 0.1 - 0.1 * self.meta_time / 2000
+                # goals[b, 0] = 0.1 * self._meta_time / 2000
+                # goals[b, 1] = 0.1 - 0.1 * self._meta_time / 2000
         return {
             'desired_goal': goals,
             'state_desired_goal': goals,
@@ -585,15 +649,26 @@ class Point2DWallEnv(Point2DEnv):
 
 
 if __name__ == "__main__":
-    import gym
-    import matplotlib.pyplot as plt
+    # import gym
+    # import matplotlib.pyplot as plt
 
-    # e = gym.make('Point2D-Box-Wall-v1')
-    # e = gym.make('Point2D-Big-UWall-v1')
-    e = gym.make('Point2D-Easy-UWall-v1')
-    for i in range(1000):
-        e.reset()
-        for j in range(5):
-            e.step(np.random.rand(2))
-            e.render()
-            im = e.get_image()
+    # # e = gym.make('Point2D-Box-Wall-v1')
+    # # e = gym.make('Point2D-Big-UWall-v1')
+    # e = gym.make('Point2D-Easy-UWall-v1')
+    # for i in range(1000):
+    #     e.reset()
+    #     for j in range(5):
+    #         e.step(np.random.rand(2))
+    #         e.render()
+    #         im = e.get_image()
+
+
+    env = Point2DEnv()
+
+    for j in range(20):
+        obs = env.reset()
+        for i in range(100):
+            obs, _, _, _ = env.step(env.action_space.sample())
+
+
+

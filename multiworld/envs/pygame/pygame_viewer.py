@@ -2,6 +2,7 @@ from enum import Enum
 
 import pygame
 from collections import Iterable
+import math
 
 
 class PygameViewer(object):
@@ -38,6 +39,9 @@ class PygameViewer(object):
         else:
             self.screen = pygame.Surface((screen_width, screen_height))
 
+        pygame.init()
+        self.font = pygame.font.SysFont("monospace", 15)
+
     def render(self):
         if self.render_onscreen:
             pygame.display.update()
@@ -51,6 +55,10 @@ class PygameViewer(object):
 
     def tick(self, dt):
         self.clock.tick(dt)
+
+    def draw_background(self, bg):
+        surf = pygame.surfarray.make_surface(bg)
+        self.screen.blit(surf, (0,0))
 
     def draw_segment(self, p1, p2, color):
         p1 = self.convert_xy(p1)
@@ -71,6 +79,10 @@ class PygameViewer(object):
         width = self.scale_x(width)
         height = self.scale_y(height)
         pygame.draw.rect(self.screen, color, (x, y, width, height), thickness)
+
+    def draw_text(self, text, pos, color):
+        label = self.font.render(text, 1, color)
+        self.screen.blit(label, pos)
 
     def convert_xy(self, point):
         x, y = point
